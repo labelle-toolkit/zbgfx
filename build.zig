@@ -10,13 +10,58 @@ pub fn build(b: *std.Build) !void {
     // OPTIONS
     //
 
+    // wasm32-emscripten (WebGL) support. Everything guarded by `is_emscripten`
+    // is inert on every native target, so native builds are byte-for-byte
+    // unchanged.
+    const is_emscripten = target.result.os.tag == .emscripten;
+
+    // Path to the emscripten sysroot's `include` directory, e.g.
+    //   <emsdk>/upstream/emscripten/cache/sysroot/include
+    // or, on a homebrew install:
+    //   /opt/homebrew/Cellar/emscripten/<ver>/libexec/cache/sysroot/include
+    // bgfx/bx/bimg are C++ and need emscripten's libc/libc++ and EGL/GLES
+    // headers, which the Zig toolchain does not ship for wasm32-emscripten.
+    // Only consulted for emscripten targets; ignored otherwise.
+    const emsdk_sysroot = b.option([]const u8, "emsdk_sysroot", "Path to the emscripten sysroot 'include' dir (wasm32-emscripten builds)");
+
     const options = .{
         .shared = b.option(bool, "shared", "Build as shared library.") orelse false,
         .imgui_include = b.option([]const u8, "imgui_include", "Path to imgui (need for imgui bgfx backend)"),
-        .multithread = b.option(bool, "multithread", "Compile with BGFX_CONFIG_MULTITHREADED") orelse true,
-        .with_shaderc = b.option(bool, "with_shaderc", "Compile with shaderc executable") orelse true,
+        // Emscripten/WebGL is single-threaded; bx auto-disables threading there
+        // and bgfx's render thread is not used, so force MULTITHREADED off for
+        // wasm regardless of the flag's value.
+        .multithread = (b.option(bool, "multithread", "Compile with BGFX_CONFIG_MULTITHREADED") orelse true) and !is_emscripten,
+        // shaderc is a host-side codegen tool that pulls in a large native
+        // toolchain (glslang, spirv-tools, ...); it cannot be built for wasm.
+        // Default it off for emscripten (can still be forced on to build a
+        // separate host shaderc).
+        .with_shaderc = b.option(bool, "with_shaderc", "Compile with shaderc executable") orelse !is_emscripten,
         .shaderc_optimize = b.option(std.builtin.OptimizeMode, "shaderc_optimize", "Shaderc optimize mode") orelse .ReleaseFast,
     };
+
+    // Adds the emscripten sysroot include path to a compile step and aliases
+    // bx's version macros. No-op on native targets (and when no sysroot given).
+    const emInclude = struct {
+        fn add(step: *std.Build.Step.Compile, emscripten: bool, sysroot: ?[]const u8) void {
+            if (!emscripten) return;
+            if (sysroot) |s| {
+                step.root_module.addSystemIncludePath(.{ .cwd_relative = s });
+            }
+            // bx version-macro drift (arguably an upstream bug in bkaradzic/bx):
+            // bx's `include/bx/platform.h` computes BX_PLATFORM_EMSCRIPTEN from
+            // the UPPERCASE macros __EMSCRIPTEN_MAJOR__/_MINOR__/_TINY__, but
+            // modern emscripten's <emscripten/version.h> only defines the
+            // lowercase spelling (__EMSCRIPTEN_major__ etc.). With the uppercase
+            // names undefined they expand to 0, so BX_PLATFORM_EMSCRIPTEN == 0
+            // and bx falls through to its POSIX/pthread path -> it mis-detects
+            // the platform and enables threading, which then fails to compile.
+            // Aliasing uppercase -> lowercase restores correct platform + version
+            // detection. Applied only on emscripten so native bx is untouched.
+            step.root_module.addCMacro("__EMSCRIPTEN_MAJOR__", "__EMSCRIPTEN_major__");
+            step.root_module.addCMacro("__EMSCRIPTEN_MINOR__", "__EMSCRIPTEN_minor__");
+            step.root_module.addCMacro("__EMSCRIPTEN_TINY__", "__EMSCRIPTEN_tiny__");
+        }
+    }.add;
 
     const options_step = b.addOptions();
     inline for (std.meta.fields(@TypeOf(options))) |field| {
@@ -42,6 +87,10 @@ pub fn build(b: *std.Build) !void {
         "-Wno-error=date-time",
         "-Wno-error=unused-command-line-argument",
         "-Wno-nan-infinity-disabled",
+        // Zig injects -Werror=date-time for reproducible builds, but bx.cpp uses
+        // __DATE__/__TIME__. Disable the diagnostic entirely (not just the
+        // -Werror promotion) so the warning does not abort the wasm build.
+        "-Wno-date-time",
     };
     const cxx_options = common_options ++ [_][]const u8{
         "-std=c++20",
@@ -51,15 +100,20 @@ pub fn build(b: *std.Build) !void {
     //
     // Tools
     //
+    // These are host-side codegen tools invoked during the build, so they must
+    // target the host, not the (possibly wasm) output target. For a native
+    // (host == target) build this resolves to the exact same target/linker as
+    // before, so native output is unchanged; it only matters when the output
+    // target differs from the host (e.g. wasm32-emscripten).
     const combine_shader_parts = b.addExecutable(.{
         .name = "combine_shader_parts",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tools/combine_shader_parts.zig"),
-            .target = target,
+            .target = b.graph.host,
             .optimize = optimize,
         }),
         .use_llvm = true,
-        .use_lld = use_lld,
+        .use_lld = !b.graph.host.result.os.tag.isDarwin(),
     });
     b.installArtifact(combine_shader_parts);
 
@@ -67,11 +121,11 @@ pub fn build(b: *std.Build) !void {
         .name = "combine_shaders",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tools/combine_shaders.zig"),
-            .target = target,
+            .target = b.graph.host,
             .optimize = optimize,
         }),
         .use_llvm = true,
-        .use_lld = use_lld,
+        .use_lld = !b.graph.host.result.os.tag.isDarwin(),
     });
     b.installArtifact(combine_shaders);
 
@@ -97,6 +151,7 @@ pub fn build(b: *std.Build) !void {
         },
     });
     bxInclude(b, bx, target, optimize);
+    emInclude(bx, is_emscripten, emsdk_sysroot);
 
     //
     // Bimg
@@ -112,9 +167,17 @@ pub fn build(b: *std.Build) !void {
         .use_llvm = true,
         .use_lld = use_lld,
     });
+    // On emscripten, Zig's bundled wasm libc++ is built WITHOUT threads, so the
+    // vendored ARM astc-encoder's ParallelManager (std::mutex / std::thread /
+    // std::condition_variable) does not compile. A WebGL runtime never CPU
+    // transcodes ASTC (the GPU consumes it via WEBGL_compressed_texture_astc),
+    // so we drop the encoder sources on emscripten and instead compile the tiny
+    // `src/em_astcenc_stub.cpp` that provides the six astcenc entry points
+    // bimg's image.cpp / image_encode.cpp reference. Native builds keep the full
+    // encoder unchanged.
     bimg.root_module.addCSourceFiles(.{
         .flags = &cxx_options,
-        .files = &bimg_files,
+        .files = if (is_emscripten) &bimg_core_files else &bimg_files,
     });
     bimg.root_module.addCSourceFiles(.{
         .flags = &c_options,
@@ -122,8 +185,15 @@ pub fn build(b: *std.Build) !void {
             "libs/bimg/3rdparty/tinyexr/deps/miniz/miniz.c",
         },
     });
+    if (is_emscripten) {
+        bimg.root_module.addCSourceFiles(.{
+            .flags = &cxx_options,
+            .files = &[_][]const u8{"src/em_astcenc_stub.cpp"},
+        });
+    }
     bxInclude(b, bimg, target, optimize);
     bimgInclude(b, bimg);
+    emInclude(bimg, is_emscripten, emsdk_sysroot);
 
     //
     // Bgfx
@@ -144,6 +214,7 @@ pub fn build(b: *std.Build) !void {
     bxInclude(b, bgfx, target, optimize);
     bgfxInclude(b, bgfx, target);
     bimgInclude(b, bgfx);
+    emInclude(bgfx, is_emscripten, emsdk_sysroot);
 
     bgfx.root_module.linkLibrary(bx);
     bgfx.root_module.linkLibrary(bimg);
@@ -613,6 +684,15 @@ const spirv_opt_path = "libs/bgfx/3rdparty/spirv-tools/";
 //
 // Many files
 //
+
+// Core bimg TUs WITHOUT the vendored ARM astc-encoder. Used on emscripten,
+// where the encoder's std::thread/mutex usage will not compile against Zig's
+// no-threads wasm libc++; the missing astcenc symbols are supplied by
+// src/em_astcenc_stub.cpp. See the bimg build block above.
+const bimg_core_files = .{
+    "libs/bimg/src/image.cpp",
+    "libs/bimg/src/image_gnf.cpp",
+};
 
 const bimg_files = .{
     "libs/bimg/src/image.cpp",
