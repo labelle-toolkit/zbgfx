@@ -62,7 +62,7 @@ pub const CCallbackVtblT = extern struct {
     cache_read_size: *const fn (_this: *CCallbackInterfaceT, _id: u64) callconv(.c) u32,
     cache_read: *const fn (_this: *CCallbackInterfaceT, _id: u64, _data: [*c]u8, _size: u32) callconv(.c) bool,
     cache_write: *const fn (_this: *CCallbackInterfaceT, _id: u64, _data: [*c]u8, _size: u32) callconv(.c) void,
-    screen_shot: *const fn (_this: *CCallbackInterfaceT, _filePath: [*:0]const u8, _width: u32, _height: u32, _pitch: u32, _data: [*c]u8, _size: u32, _yflip: bool) callconv(.c) void,
+    screen_shot: *const fn (_this: *CCallbackInterfaceT, _filePath: [*:0]const u8, _width: u32, _height: u32, _pitch: u32, _format: bgfx.TextureFormat, _data: [*c]u8, _size: u32, _yflip: bool) callconv(.c) void,
     capture_begin: *const fn (_this: *CCallbackInterfaceT, _width: u32, _height: u32, _pitch: u32, _format: bgfx.TextureFormat, _yflip: bool) callconv(.c) void,
     capture_end: *const fn (_this: *CCallbackInterfaceT) callconv(.c) void,
     capture_frame: *const fn (_this: *CCallbackInterfaceT, _data: [*c]u8, _size: u32) callconv(.c) void,
@@ -122,12 +122,13 @@ pub const DefaultZigCallbackVTable = struct {
         _ = _data;
         _ = _size;
     }
-    pub fn screen_shot(_this: *Self.CCallbackInterfaceT, _filePath: [*:0]const u8, _width: u32, _height: u32, _pitch: u32, _data: [*c]u8, _size: u32, _yflip: bool) callconv(.c) void {
+    pub fn screen_shot(_this: *Self.CCallbackInterfaceT, _filePath: [*:0]const u8, _width: u32, _height: u32, _pitch: u32, _format: bgfx.TextureFormat, _data: [*c]u8, _size: u32, _yflip: bool) callconv(.c) void {
         _ = _this;
         _ = _filePath;
         _ = _width;
         _ = _height;
         _ = _pitch;
+        _ = _format;
         _ = _data;
         _ = _size;
         _ = _yflip;
