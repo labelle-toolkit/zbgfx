@@ -40,7 +40,10 @@ pub fn callShaderc(
     shaderc_cmd.step.dependOn(install_shaderc_step);
 
     options.platform.addAsArg(shaderc_cmd);
-    options.profile.addAsArg(shaderc_cmd);
+    // The GLES renderer loads compute shaders as ESSL 310, so an es_300
+    // compute build can never run; promote it rather than fail at load.
+    const profile: shader.Profile = if (options.shaderType == .compute and options.profile == .es_300) .es_310 else options.profile;
+    profile.addAsArg(shaderc_cmd);
     options.shaderType.addAsArg(shaderc_cmd);
 
     if (options.optimize) |o| {
@@ -95,8 +98,11 @@ pub const ShaderInput = struct {
     shaderType: shader.ShaderType,
     path: std.Build.LazyPath,
     parts: []const PartDef = &.{
-        .{ .profile = .glsl_120, .platform = .linux },
-        .{ .profile = .es_100, .platform = .android },
+        // bgfx API 161 strips shaderc's #version and prepends GLSL 430 / ESSL
+        // 300 (310 for compute) at load, so the legacy 120 / 100 dialects no
+        // longer run — and shaderc itself rejects GLSL profiles below 330.
+        .{ .profile = .glsl_330, .platform = .linux },
+        .{ .profile = .es_300, .platform = .android },
         .{ .profile = .spirv, .platform = .linux },
         .{ .profile = .metal, .platform = .osx, .optimize = .o3 },
         .{ .profile = .s_5_0, .platform = .windows, .optimize = .o3 },

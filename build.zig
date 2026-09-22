@@ -266,6 +266,8 @@ pub fn build(b: *std.Build) !void {
         if (options.video) {
             bgfx.root_module.linkFramework("VideoToolbox", .{ .needed = true });
             bgfx.root_module.linkFramework("CoreMedia", .{ .needed = true });
+            // video_mtl.cpp calls CVMetalTextureCache* / CVPixelBuffer* directly.
+            bgfx.root_module.linkFramework("CoreVideo", .{ .needed = true });
         }
     }
 
@@ -735,6 +737,7 @@ const spirv_opt_files = .{
     spirv_opt_path ++ "source/opt/control_dependence.cpp",
     spirv_opt_path ++ "source/opt/convert_to_half_pass.cpp",
     spirv_opt_path ++ "source/opt/convert_to_sampled_image_pass.cpp",
+    spirv_opt_path ++ "source/opt/convert_to_untyped.cpp",
     spirv_opt_path ++ "source/opt/copy_prop_arrays.cpp",
     spirv_opt_path ++ "source/opt/dataflow.cpp",
     spirv_opt_path ++ "source/opt/dead_branch_elim_pass.cpp",
