@@ -31,6 +31,12 @@ pub fn build(b: *std.Build) !void {
         // and bgfx's render thread is not used, so force MULTITHREADED off for
         // wasm regardless of the flag's value.
         .multithread = (b.option(bool, "multithread", "Compile with BGFX_CONFIG_MULTITHREADED") orelse true) and !is_emscripten,
+        // bgfx's native hardware video decoder (API 146+). Backends exist only
+        // for D3D11/D3D12/Metal/Vulkan — there is NO OpenGL/GLES backend and
+        // none for wasm — so a consumer whose Android and web targets run GLES
+        // gets nothing from it while still paying its link dependencies
+        // (VideoToolbox + CoreMedia on Apple). Default OFF; opt in per project.
+        .video = b.option(bool, "video", "Compile bgfx's native video decoder (BGFX_CONFIG_VIDEO)") orelse false,
         // shaderc is a host-side codegen tool that pulls in a large native
         // toolchain (glslang, spirv-tools, ...); it cannot be built for wasm.
         // Default it off for emscripten (can still be forced on to build a
@@ -220,6 +226,7 @@ pub fn build(b: *std.Build) !void {
     bgfx.root_module.linkLibrary(bimg);
 
     bgfx.root_module.addCMacro("BGFX_CONFIG_MULTITHREADED", if (options.multithread) "1" else "0");
+    bgfx.root_module.addCMacro("BGFX_CONFIG_VIDEO", if (options.video) "1" else "0");
 
     bgfx.root_module.addIncludePath(b.path("includes"));
 
@@ -229,6 +236,15 @@ pub fn build(b: *std.Build) !void {
         bgfx.root_module.linkFramework("QuartzCore", .{ .needed = true });
         bgfx.root_module.linkFramework("Metal", .{ .needed = true });
         bgfx.root_module.linkFramework("MetalKit", .{ .needed = true });
+        // Only the native video decoder needs these, and it is off by default
+        // (see the `video` option): its Metal path drives VideoToolbox over
+        // CoreMedia sample buffers, and linking them unconditionally would make
+        // every consumer pay for a decoder most cannot use — there is no
+        // GLES/wasm backend upstream. labelle-bgfx#119.
+        if (options.video) {
+            bgfx.root_module.linkFramework("VideoToolbox", .{ .needed = true });
+            bgfx.root_module.linkFramework("CoreMedia", .{ .needed = true });
+        }
     }
 
     bgfx.root_module.addCSourceFiles(.{
