@@ -7,7 +7,35 @@
 #define IMGUI_H_HEADER_GUARD
 
 #include <bgfx/bgfx.h>
-#include <imgui/imgui_internal.h>
+#include <bx/bx.h>
+#include <dear-imgui/imgui.h>
+#include <iconfontheaders/icons_kenney.h>
+#include <iconfontheaders/icons_font_awesome.h>
+
+#define IMGUI_MBUT_LEFT   0x01
+#define IMGUI_MBUT_RIGHT  0x02
+#define IMGUI_MBUT_MIDDLE 0x04
+
+inline uint32_t imguiRGBA(uint8_t _r, uint8_t _g, uint8_t _b, uint8_t _a = 255)
+{
+	return 0
+		| (uint32_t(_r) <<  0)
+		| (uint32_t(_g) <<  8)
+		| (uint32_t(_b) << 16)
+		| (uint32_t(_a) << 24)
+		;
+}
+
+namespace bx { struct AllocatorI; }
+
+void imguiCreate(float _fontSize = 18.0f, bx::AllocatorI* _allocator = NULL);
+void imguiDestroy();
+
+void imguiBeginFrame(int32_t _mx, int32_t _my, uint8_t _button, int32_t _scroll, uint16_t _width, uint16_t _height, int _inputChar = -1, bgfx::ViewId _view = 255);
+void imguiEndFrame();
+
+namespace entry { class AppI; }
+void showExampleDialog(entry::AppI* _app, const char* _errorText = NULL);
 
 namespace ImGui
 {
