@@ -98,10 +98,32 @@ pub fn build(b: *std.Build) !void {
         // -Werror promotion) so the warning does not abort the wasm build.
         "-Wno-date-time",
     };
-    const cxx_options = common_options ++ [_][]const u8{
-        "-std=c++20",
-    };
+    const cxx_options = common_options ++ [_][]const u8{"-std=c++20"};
     const c_options = common_options ++ [_][]const u8{};
+
+    // Upstream bx raised its x86 minimum spec to SSE4.2 (bgfx API 161 era):
+    // `simd_t.h` now includes <smmintrin.h> with the comment "SSE4.1 minspec
+    // is SSE4.2 so always available" and dropped the old `#if defined(__SSE4_1__)`
+    // guard. Zig's BASELINE x86_64 has SSE2 but not SSE4.1, so the intrinsics
+    // (`_mm_blendv_ps`, `__builtin_ia32_roundps`) fail to compile.
+    //
+    // This must be a TARGET FEATURE, not a `-msse4.2` C flag: Zig compiles C
+    // against its own resolved target feature set and the raw flag is ignored,
+    // which is exactly what the first attempt at this hit. Adding the feature
+    // to the query and re-resolving is what actually reaches clang.
+    //
+    // Only the vendored C/C++ libraries need it, and only on x86 — ARM and
+    // wasm resolve unchanged. The practical floor is Nehalem (2008).
+    // labelle-bgfx#119.
+    const c_target = blk: {
+        switch (target.result.cpu.arch) {
+            .x86, .x86_64 => {},
+            else => break :blk target,
+        }
+        var query = target.query;
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sse4_2));
+        break :blk b.resolveTargetQuery(query);
+    };
 
     //
     // Tools
@@ -142,7 +164,7 @@ pub fn build(b: *std.Build) !void {
         .linkage = .static,
         .name = "bx",
         .root_module = b.createModule(.{
-            .target = target,
+            .target = c_target,
             .optimize = optimize,
             .link_libc = true,
             .link_libcpp = true,
@@ -166,7 +188,7 @@ pub fn build(b: *std.Build) !void {
         .linkage = .static,
         .name = "bimg",
         .root_module = b.createModule(.{
-            .target = target,
+            .target = c_target,
             .optimize = optimize,
             .link_libcpp = true,
         }),
@@ -209,7 +231,7 @@ pub fn build(b: *std.Build) !void {
         .linkage = if (options.shared) .dynamic else .static,
         .name = "bgfx",
         .root_module = b.createModule(.{
-            .target = target,
+            .target = c_target,
             .optimize = optimize,
             .link_libcpp = true,
         }),
