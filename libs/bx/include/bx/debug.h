@@ -19,12 +19,6 @@ namespace bx
 	///
 	void debugBreak();
 
-	/// Check whether a debugger is present or not.
-	///
-	/// @returns True when debugger is present. Otherwise returns false.
-	///
-	bool isDebuggerPresent();
-
 	/// Write string to debug output.
 	///
 	/// @param[in] _str Zero terminated string to write.
