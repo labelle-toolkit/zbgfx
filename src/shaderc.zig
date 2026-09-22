@@ -205,14 +205,14 @@ pub fn createDefaultOptionsForRenderer(renderer: bgfx.RendererType) ShadercOptio
         .OpenGLES => {
             return .{
                 .shaderType = .vertex,
-                .profile = .es_100,
+                .profile = .es_300, // API 161 GLES loads ESSL 300+ only
                 .platform = .android,
             };
         },
         .OpenGL => {
             return .{
                 .shaderType = .vertex,
-                .profile = .glsl_120,
+                .profile = .glsl_330, // API 161 shaderc rejects GLSL < 330
                 .platform = .linux,
             };
         },
