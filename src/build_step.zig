@@ -40,10 +40,7 @@ pub fn callShaderc(
     shaderc_cmd.step.dependOn(install_shaderc_step);
 
     options.platform.addAsArg(shaderc_cmd);
-    // The GLES renderer loads compute shaders as ESSL 310, so an es_300
-    // compute build can never run; promote it rather than fail at load.
-    const profile: shader.Profile = if (options.shaderType == .compute and options.profile == .es_300) .es_310 else options.profile;
-    profile.addAsArg(shaderc_cmd);
+    options.profile.addAsArg(shaderc_cmd);
     options.shaderType.addAsArg(shaderc_cmd);
 
     if (options.optimize) |o| {
