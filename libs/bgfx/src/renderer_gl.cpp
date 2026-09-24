@@ -1771,12 +1771,24 @@ namespace bgfx { namespace gl
 					&& emscripten_webgl_enable_extension(ctx, "WEBGL_compressed_texture_etc")
 					;
 
+			// labelle-toolkit: WEBGL_compressed_texture_astc exposes the WHOLE
+			// ASTC LDR set (all 14 2D block sizes), not the six upstream listed.
+			// Without 8x8 etc. here, bgfx reported those sizes as emulated and
+			// took its CPU fallback on web (labelle-bgfx#147).
 			case TextureFormat::ASTC4x4:
+			case TextureFormat::ASTC5x4:
 			case TextureFormat::ASTC5x5:
+			case TextureFormat::ASTC6x5:
 			case TextureFormat::ASTC6x6:
 			case TextureFormat::ASTC8x5:
 			case TextureFormat::ASTC8x6:
+			case TextureFormat::ASTC8x8:
 			case TextureFormat::ASTC10x5:
+			case TextureFormat::ASTC10x6:
+			case TextureFormat::ASTC10x8:
+			case TextureFormat::ASTC10x10:
+			case TextureFormat::ASTC12x10:
+			case TextureFormat::ASTC12x12:
 				return emscripten_webgl_enable_extension(ctx, "WEBGL_compressed_texture_astc");
 
 			default:
