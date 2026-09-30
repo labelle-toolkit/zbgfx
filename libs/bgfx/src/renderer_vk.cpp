@@ -2359,6 +2359,11 @@ VK_IMPORT_DEVICE
 							}
 						}
 					}
+
+					// Initialization accepted this format preference, possibly via
+					// a surface-format fallback. Neutral resets reuse that preference;
+					// retain its backbuffer support without claiming texture support.
+					g_caps.formats[m_mainSwapChain.formatColor] |= BGFX_CAPS_FORMAT_TEXTURE_BACKBUFFER;
 				}
 				else
 				{
@@ -3216,7 +3221,10 @@ VK_IMPORT_DEVICE
 				if (captureSize > m_captureSize)
 				{
 					release(m_captureBuffer);
-					recycleMemory(m_captureMemory);
+					if (VK_NULL_HANDLE != m_captureMemory.mem)
+					{
+						recycleMemory(m_captureMemory);
+					}
 
 					m_captureSize = captureSize;
 					VK_CHECK(createReadbackBuffer(m_captureSize, &m_captureBuffer, &m_captureMemory) );
