@@ -8264,12 +8264,19 @@ VK_DESTROY
 			|| (m_desc.flags & recreateSurfaceMask) != (_desc.flags & recreateSurfaceMask)
 			;
 
+		const bool sizeChanged = m_desc.width != _desc.width || m_desc.height != _desc.height;
+		// Extent recovery may precede the application's resize notification.
+		// Reconcile that notification with the already-created actual extent,
+		// while retaining the application's requested dimensions in m_desc.
+		const bool reconcileExtent = m_reconcileExtent
+			&& _desc.width == m_sci.imageExtent.width
+			&& _desc.height == m_sci.imageExtent.height;
+
 		const bool recreateSwapchain = false
 			|| m_needToRecreateSwapchain
 			|| m_desc.formatColor      != _desc.formatColor
 			|| m_desc.formatDepthStencil != _desc.formatDepthStencil
-			|| m_desc.width       != _desc.width
-			|| m_desc.height      != _desc.height
+			|| (sizeChanged && !reconcileExtent)
 			|| (m_desc.flags & recreateSwapchainMask) != (_desc.flags & recreateSwapchainMask)
 			|| vsyncChanged
 			|| recreateSurface
@@ -8285,6 +8292,10 @@ VK_DESTROY
 		m_nwh   = _nwh;
 		m_desc  = _desc;
 		m_vsync = vsync;
+		if (sizeChanged || recreateAttachments)
+		{
+			m_reconcileExtent = false;
+		}
 
 		if (recreateAttachments)
 		{
@@ -8323,13 +8334,16 @@ VK_DESTROY
 					&& surfaceCapabilities.maxImageExtent.height <= surfaceExtentSanityMax
 					;
 
+				const bool recoverSurfaceExtent = m_extentRecovery
+					&& UINT32_MAX != surfaceCapabilities.currentExtent.width
+					&& UINT32_MAX != surfaceCapabilities.currentExtent.height;
 				const uint32_t width = bx::clamp<uint32_t>(
-					  m_desc.width
+					  recoverSurfaceExtent ? surfaceCapabilities.currentExtent.width : m_desc.width
 					, surfaceCapabilities.minImageExtent.width
 					, surfaceCapabilities.maxImageExtent.width
 					);
 				const uint32_t height = bx::clamp<uint32_t>(
-					  m_desc.height
+					  recoverSurfaceExtent ? surfaceCapabilities.currentExtent.height : m_desc.height
 					, surfaceCapabilities.minImageExtent.height
 					, surfaceCapabilities.maxImageExtent.height
 					);
@@ -8604,13 +8618,18 @@ VK_DESTROY
 			: s_textureFormat[m_colorFormat].m_fmt
 			;
 
+		// A surface-driven recovery must use the new concrete surface extent,
+		// rather than the old request that preceded the resize notification.
+		const bool recoverSurfaceExtent = m_extentRecovery
+			&& UINT32_MAX != surfaceCapabilities.currentExtent.width
+			&& UINT32_MAX != surfaceCapabilities.currentExtent.height;
 		const uint32_t width = bx::clamp<uint32_t>(
-			  m_desc.width
+			  recoverSurfaceExtent ? surfaceCapabilities.currentExtent.width : m_desc.width
 			, surfaceCapabilities.minImageExtent.width
 			, surfaceCapabilities.maxImageExtent.width
 			);
 		const uint32_t height = bx::clamp<uint32_t>(
-			  m_desc.height
+			  recoverSurfaceExtent ? surfaceCapabilities.currentExtent.height : m_desc.height
 			, surfaceCapabilities.minImageExtent.height
 			, surfaceCapabilities.maxImageExtent.height
 			);
@@ -8808,6 +8827,21 @@ VK_DESTROY
 		m_currentSemaphore = 0;
 
 		m_needPresent = false;
+		m_suboptimal = false;
+		m_reconcileExtent = m_extentRecovery;
+		m_extentRecovery = false;
+		m_surfaceExtent = surfaceCapabilities.currentExtent;
+		m_surfaceTransform = surfaceCapabilities.currentTransform;
+		++m_swapChainCreateCount;
+		BX_TRACE("Swapchain creation #%u: reason=%s, surface extent=%ux%u, currentTransform=0x%x, supportedTransforms=0x%x, preTransform=0x%x."
+			, m_swapChainCreateCount
+			, 1 == m_swapChainCreateCount ? "initial" : m_needToRecreateSwapchain ? "surface recovery" : "reset"
+			, m_surfaceExtent.width
+			, m_surfaceExtent.height
+			, m_surfaceTransform
+			, surfaceCapabilities.supportedTransforms
+			, m_sci.preTransform
+			);
 		m_needToRecreateSwapchain = false;
 
 		return result;
@@ -9135,16 +9169,23 @@ VK_DESTROY
 
 			switch (result)
 			{
+			case VK_SUBOPTIMAL_KHR:
+				// This is a successful acquisition: consume its signaled semaphore
+				// and present the acquired image before considering recreation.
+				m_suboptimal = true;
+				break;
+
 			case VK_SUCCESS:
 				break;
 
 			case VK_ERROR_SURFACE_LOST_KHR:
+				m_extentRecovery = false;
 				m_needToRecreateSurface = true;
 				m_needToRecreateSwapchain = true;
 				return false;
 
 			case VK_ERROR_OUT_OF_DATE_KHR:
-			case VK_SUBOPTIMAL_KHR:
+				m_extentRecovery = false;
 				m_needToRecreateSwapchain = true;
 				return false;
 
@@ -9234,13 +9275,21 @@ VK_DESTROY
 
 			switch (result)
 			{
+			case VK_SUCCESS:
+				break;
+
+			case VK_SUBOPTIMAL_KHR:
+				m_suboptimal = true;
+				break;
+
 			case VK_ERROR_SURFACE_LOST_KHR:
+				m_extentRecovery = false;
 				m_needToRecreateSurface = true;
 				m_needToRecreateSwapchain = true;
 				break;
 
 			case VK_ERROR_OUT_OF_DATE_KHR:
-			case VK_SUBOPTIMAL_KHR:
+				m_extentRecovery = false;
 				m_needToRecreateSwapchain = true;
 				break;
 
@@ -9252,6 +9301,36 @@ VK_DESTROY
 
 			m_needPresent = false;
 			m_lastImageRenderedSemaphore = VK_NULL_HANDLE;
+
+			if (m_suboptimal && !m_needToRecreateSwapchain)
+			{
+				// SUBOPTIMAL alone is not evidence that rebuilding will help.
+				// Keep compositor rotation: rebuilding with the same preTransform
+				// cannot resolve a transform-only mismatch. Recover only an extent
+				// change relative to the successful creation's surface snapshot,
+				// not imageExtent (which may intentionally differ from the surface).
+				VkSurfaceCapabilitiesKHR caps;
+				const VkResult capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_renderVK->m_physicalDevice, m_surface, &caps);
+				if (VK_SUCCESS != capsResult)
+				{
+					m_needToRecreateSurface |= VK_ERROR_SURFACE_LOST_KHR == capsResult;
+					m_needToRecreateSwapchain = true;
+					s_renderVK->handleDeviceLost(capsResult);
+					BX_TRACE("SUBOPTIMAL recovery: surface capabilities query failed: %s.", getName(capsResult) );
+				}
+				else if (caps.currentExtent.width  != m_surfaceExtent.width
+					 ||  caps.currentExtent.height != m_surfaceExtent.height)
+				{
+					m_extentRecovery = true;
+					m_needToRecreateSwapchain = true;
+					BX_TRACE("SUBOPTIMAL recovery: surface extent %ux%u -> %ux%u, transform 0x%x -> 0x%x."
+						, m_surfaceExtent.width, m_surfaceExtent.height
+						, caps.currentExtent.width, caps.currentExtent.height
+						, m_surfaceTransform, caps.currentTransform
+						);
+				}
+			}
+			m_suboptimal = false;
 		}
 	}
 

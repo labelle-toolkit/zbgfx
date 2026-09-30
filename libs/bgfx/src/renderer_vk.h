@@ -776,6 +776,10 @@ VK_DESTROY_FUNC(DescriptorSet);
 			, m_lastImageRenderedSemaphore(VK_NULL_HANDLE)
 			, m_lastImageAcquiredSemaphore(VK_NULL_HANDLE)
 			, m_needPresent(false)
+			, m_suboptimal(false)
+			, m_extentRecovery(false)
+			, m_reconcileExtent(false)
+			, m_swapChainCreateCount(0)
 			, m_backBufferDepthStencilImageView(VK_NULL_HANDLE)
 			, m_depthStencilFormat(VK_FORMAT_UNDEFINED)
 			, m_depthStencilAspect(0)
@@ -841,6 +845,12 @@ VK_DESTROY_FUNC(DescriptorSet);
 		VkSemaphore m_lastImageAcquiredSemaphore;
 
 		bool m_needPresent;
+		bool m_suboptimal;
+		bool m_extentRecovery;
+		bool m_reconcileExtent;
+		uint32_t m_swapChainCreateCount;
+		VkExtent2D m_surfaceExtent;
+		VkSurfaceTransformFlagBitsKHR m_surfaceTransform;
 		bool m_needToRecreateSwapchain;
 		bool m_needToRecreateSurface;
 
