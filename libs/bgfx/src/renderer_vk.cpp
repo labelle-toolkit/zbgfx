@@ -8642,6 +8642,35 @@ VK_DESTROY
 			}
 		}
 
+		// OPAQUE is not guaranteed, even for a non-transparent backbuffer.
+		// Never ask the surface for a composite-alpha mode it does not support.
+		const VkCompositeAlphaFlagsKHR supportedCompositeAlpha = surfaceCapabilities.supportedCompositeAlpha;
+		if (0 == (supportedCompositeAlpha & compositeAlpha) )
+		{
+			if (supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+			{
+				compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+			}
+			else if (supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
+			{
+				compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+			}
+			else if (0 != supportedCompositeAlpha)
+			{
+				// The lowest set bit is one supported mode, not a mask of modes.
+				compositeAlpha = VkCompositeAlphaFlagBitsKHR(supportedCompositeAlpha & (~supportedCompositeAlpha + 1) );
+			}
+			else
+			{
+				BX_TRACE("Create swapchain error: Surface supports no composite-alpha mode.");
+				return VK_ERROR_INITIALIZATION_FAILED;
+			}
+		}
+		BX_TRACE("Swapchain composite alpha: supported 0x%08x, selected 0x%08x."
+			, supportedCompositeAlpha
+			, uint32_t(compositeAlpha)
+			);
+
 		const VkImageUsageFlags imageUsageMask = 0
 			| VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
 			| VK_IMAGE_USAGE_TRANSFER_SRC_BIT
