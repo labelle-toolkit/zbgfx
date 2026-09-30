@@ -10837,19 +10837,17 @@ VK_DESTROY
 
 					if (VK_NULL_HANDLE != program.m_descriptorSetLayout)
 					{
-						ChunkedScratchBufferOffset sbo;
+						ChunkedScratchBufferOffset sbo = {};
 
 						const uint32_t vsSize = program.m_vsh->m_size;
 						uint32_t numOffsets = 0;
 
-						if (constantsChanged
-						||  hasPredefined)
+						// Every dynamic uniform binding needs a valid allocation and offset,
+						// even when the program's constants did not change.
+						if (vsSize > 0)
 						{
-							if (vsSize > 0)
-							{
-								uniformScratchBuffer.write(sbo, m_vsScratch, vsSize);
-								numOffsets = 1;
-							}
+							uniformScratchBuffer.write(sbo, m_vsScratch, vsSize);
+							numOffsets = 1;
 						}
 
 						bx::HashMurmur2A hash;
@@ -11159,7 +11157,6 @@ VK_DESTROY
 						}
 					}
 
-					bool constantsChanged = false;
 					if (draw.m_uniformBegin < draw.m_uniformEnd
 					||  currentProgram.idx != key.m_program.idx
 					||  BGFX_STATE_ALPHA_REF_MASK & changedFlags)
@@ -11183,7 +11180,6 @@ VK_DESTROY
 						}
 
 						hasPredefined = 0 < program.m_numPredefined;
-						constantsChanged = true;
 					}
 
 					const ProgramVK& program = m_program[currentProgram.idx];
@@ -11197,16 +11193,15 @@ VK_DESTROY
 
 					if (VK_NULL_HANDLE != program.m_descriptorSetLayout)
 					{
-						ChunkedScratchBufferOffset sbo;
+						ChunkedScratchBufferOffset sbo = {};
 
 						const uint32_t vsSize = program.m_vsh->m_size;
 						const uint32_t fsSize = NULL != program.m_fsh ? program.m_fsh->m_size : 0;
 						uint32_t numOffsets = 0;
 
-						if (true
-						&& (constantsChanged || hasPredefined)
-						&& (0 < vsSize || 0 < fsSize)
-						   )
+						// A descriptor with dynamic uniforms cannot reuse an uninitialized
+						// scratch handle, or omit the offsets when the values are unchanged.
+						if (0 < vsSize || 0 < fsSize)
 						{
 							uniformScratchBuffer.write(sbo, m_vsScratch, vsSize, m_fsScratch, fsSize);
 							numOffsets = (0 < vsSize) + (0 < fsSize);
