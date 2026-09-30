@@ -8250,7 +8250,8 @@ VK_DESTROY
 		const VkPhysicalDevice physicalDevice = s_renderVK->m_physicalDevice;
 
 		const uint64_t recreateSurfaceMask     = BGFX_SWAP_CHAIN_HIDPI;
-		const uint64_t recreateSwapchainMask   = BGFX_SWAP_CHAIN_SRGB_BACKBUFFER;
+		// Changing MSAA can require a different supported surface color format.
+		const uint64_t recreateSwapchainMask   = BGFX_SWAP_CHAIN_SRGB_BACKBUFFER | BGFX_SWAP_CHAIN_MSAA_MASK;
 		const uint64_t recreateAttachmentsMask = BGFX_SWAP_CHAIN_MSAA_MASK;
 
 		const bool vsync = !!(s_renderVK->m_reset & BGFX_RESET_VSYNC);
@@ -8594,18 +8595,26 @@ VK_DESTROY
 		m_depthFormat = bgfx::TextureFormat::UnknownDepth;
 
 		uint32_t numSurfaceFormats = 0;
-		result = vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, m_surface, &numSurfaceFormats, NULL);
+		VkSurfaceFormatKHR* surfaceFormats = NULL;
+		do
+		{
+			bx::free(g_allocator, surfaceFormats);
+			surfaceFormats = NULL;
+			result = vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, m_surface, &numSurfaceFormats, NULL);
+			if (VK_SUCCESS != result || 0 == numSurfaceFormats)
+			{
+				BX_TRACE("Create swapchain error: Unable to query surface formats (%s, count: %d).", getName(result), numSurfaceFormats);
+				return VK_SUCCESS == result ? VK_ERROR_INITIALIZATION_FAILED : result;
+			}
+			surfaceFormats = (VkSurfaceFormatKHR*)bx::alloc(g_allocator, numSurfaceFormats * sizeof(VkSurfaceFormatKHR) );
+			result = vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, m_surface, &numSurfaceFormats, surfaceFormats);
+		}
+		while (VK_INCOMPLETE == result);
 		if (VK_SUCCESS != result || 0 == numSurfaceFormats)
 		{
-			BX_TRACE("Create swapchain error: Unable to query surface formats (%s, count: %d).", getName(result), numSurfaceFormats);
-			return VK_SUCCESS == result ? VK_ERROR_INITIALIZATION_FAILED : result;
-		}
-		VkSurfaceFormatKHR* surfaceFormats = (VkSurfaceFormatKHR*)BX_STACK_ALLOC(numSurfaceFormats * sizeof(VkSurfaceFormatKHR) );
-		result = vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, m_surface, &numSurfaceFormats, surfaceFormats);
-		if (VK_SUCCESS != result && VK_INCOMPLETE != result)
-		{
+			bx::free(g_allocator, surfaceFormats);
 			BX_TRACE("Create swapchain error: Unable to read surface formats (%s).", getName(result) );
-			return result;
+			return VK_SUCCESS == result ? VK_ERROR_INITIALIZATION_FAILED : result;
 		}
 		BX_TRACE("Surface format count: %d (query result: %s).", numSurfaceFormats, getName(result) );
 		for (uint32_t ii = 0; ii < numSurfaceFormats; ++ii)
@@ -8613,6 +8622,27 @@ VK_DESTROY
 			BX_TRACE("Surface format[%d]: format %d, color space %d.", ii, surfaceFormats[ii].format, surfaceFormats[ii].colorSpace);
 		}
 
+		const uint32_t samplerIndex = (m_desc.flags & BGFX_SWAP_CHAIN_MSAA_MASK) >> BGFX_SWAP_CHAIN_MSAA_SHIFT;
+		const VkSampleCountFlagBits samples = s_msaa[samplerIndex].Sample;
+		const auto supportsColorFormat = [physicalDevice, samples](TextureFormat::Enum _format, VkFormat _vkFormat)
+		{
+			if (VK_FORMAT_UNDEFINED == _vkFormat
+			||  0 == (g_caps.formats[_format] & BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER) )
+			{
+				return false;
+			}
+			if (VK_SAMPLE_COUNT_1_BIT == samples)
+			{
+				return true;
+			}
+			// Test the actual linear/sRGB format and the same usage as the MSAA attachment.
+			VkImageFormatProperties properties;
+			return VK_SUCCESS == vkGetPhysicalDeviceImageFormatProperties(physicalDevice, _vkFormat
+				, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL
+				, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+				, 0, &properties)
+				&& 0 != (properties.sampleCounts & samples);
+		};
 		const bool validRequest = m_desc.formatColor > TextureFormat::Unknown
 			&& m_desc.formatColor < TextureFormat::UnknownDepth
 			&& 0 != (g_caps.formats[m_desc.formatColor] & BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER)
@@ -8623,7 +8653,7 @@ VK_DESTROY
 		VkFormat surfaceFormat = VK_FORMAT_UNDEFINED;
 		// A single UNDEFINED entry means the surface accepts any format.
 		const bool anyFormat = 1 == numSurfaceFormats && VK_FORMAT_UNDEFINED == surfaceFormats[0].format;
-		if (VK_FORMAT_UNDEFINED != requestedFormat)
+		if (validRequest && supportsColorFormat(m_desc.formatColor, requestedFormat) )
 		{
 			for (uint32_t ii = 0; ii < numSurfaceFormats; ++ii)
 			{
@@ -8651,8 +8681,7 @@ VK_DESTROY
 			{
 				const TextureFormat::Enum colorFormat = preferredFormats[ii];
 				const VkFormat fmt = srgb ? s_textureFormat[colorFormat].m_fmtSrgb : s_textureFormat[colorFormat].m_fmt;
-				if (VK_FORMAT_UNDEFINED != fmt
-				&&  0 != (g_caps.formats[colorFormat] & BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER) )
+				if (supportsColorFormat(colorFormat, fmt) )
 				{
 					m_colorFormat = colorFormat;
 					surfaceFormat = fmt;
@@ -8670,8 +8699,7 @@ VK_DESTROY
 			for (uint32_t ii = TextureFormat::Unknown+1; ii < TextureFormat::UnknownDepth; ++ii)
 			{
 				const VkFormat fmt = srgb ? s_textureFormat[ii].m_fmtSrgb : s_textureFormat[ii].m_fmt;
-				if (VK_FORMAT_UNDEFINED != fmt
-				&& 0 != (g_caps.formats[ii] & BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER)
+				if (supportsColorFormat(TextureFormat::Enum(ii), fmt)
 				&& (surfaceFormats[sfidx].format == fmt || anyFormat) )
 				{
 					m_colorFormat = TextureFormat::Enum(ii);
@@ -8680,6 +8708,7 @@ VK_DESTROY
 				}
 			}
 		}
+		bx::free(g_allocator, surfaceFormats);
 		if (TextureFormat::Count == m_colorFormat)
 		{
 			BX_TRACE("Create swapchain error: Unable to find surface format (srgb: %d).", srgb);
