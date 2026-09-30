@@ -3306,7 +3306,6 @@ VK_IMPORT_DEVICE
 			||  m_mainSwapChain.formatDepthStencil !=  _swapChain.formatDepthStencil
 			||  m_mainSwapChain.depth.idx          !=  _swapChain.depth.idx
 			||  m_mainSwapChain.numBackBuffers     !=  _swapChain.numBackBuffers
-			||  m_mainSwapChain.maxFrameLatency    !=  _swapChain.maxFrameLatency
 			||  m_mainSwapChain.nwh                !=  _swapChain.nwh
 			||  m_mainSwapChain.ndt                !=  _swapChain.ndt
 			||  m_mainSwapChain.flags              !=  _swapChain.flags
@@ -3322,6 +3321,8 @@ VK_IMPORT_DEVICE
 				// Consume a matching late notification without resetting framebuffer
 				// and capture resources that already use the recovered dimensions.
 				m_backBuffer.update(m_commandBuffer, _swapChain);
+				m_textVideoMem.resize(false, _swapChain.width, _swapChain.height);
+				m_textVideoMem.clear();
 			}
 			else if (sizeChanged || parametersChanged || recoveryPending)
 			{
@@ -3335,9 +3336,6 @@ VK_IMPORT_DEVICE
 				m_mainSwapChain = _swapChain;
 				m_reset = flags;
 
-				m_textVideoMem.resize(false, _swapChain.width, _swapChain.height);
-				m_textVideoMem.clear();
-
 				preReset();
 
 				m_backBuffer.update(m_commandBuffer, m_mainSwapChain);
@@ -3345,6 +3343,9 @@ VK_IMPORT_DEVICE
 				// is now final (as it was potentially clamped by the Vulkan driver).
 				m_mainSwapChain.width = m_backBuffer.m_width;
 				m_mainSwapChain.height = m_backBuffer.m_height;
+
+				m_textVideoMem.resize(false, m_backBuffer.m_width, m_backBuffer.m_height);
+				m_textVideoMem.clear();
 
 				for (uint16_t ii = 0; ii < m_numWindows; ++ii)
 				{
@@ -8324,7 +8325,17 @@ VK_DESTROY
 		m_nwh   = _nwh;
 		m_desc  = _desc;
 		m_vsync = vsync;
-		if (sizeChanged || recreateAttachments)
+		// Preserve recovered dimensions across another recreation while the
+		// frontend still carries the same old request. Explicit new sizes win.
+		if (sizeChanged)
+		{
+			m_extentRecovery = false;
+		}
+		if (recreateSwapchain && m_reconcileExtent && !sizeChanged)
+		{
+			m_extentRecovery = true;
+		}
+		if (sizeChanged || recreateSwapchain)
 		{
 			m_reconcileExtent = false;
 		}
@@ -8366,16 +8377,16 @@ VK_DESTROY
 					&& surfaceCapabilities.maxImageExtent.height <= surfaceExtentSanityMax
 					;
 
-				const bool recoverSurfaceExtent = m_extentRecovery
+				const bool concreteSurfaceExtent = (m_extentRecovery || m_reconcileExtent)
 					&& UINT32_MAX != surfaceCapabilities.currentExtent.width
 					&& UINT32_MAX != surfaceCapabilities.currentExtent.height;
 				const uint32_t width = bx::clamp<uint32_t>(
-					  recoverSurfaceExtent ? surfaceCapabilities.currentExtent.width : m_desc.width
+					  concreteSurfaceExtent ? surfaceCapabilities.currentExtent.width : m_desc.width
 					, surfaceCapabilities.minImageExtent.width
 					, surfaceCapabilities.maxImageExtent.width
 					);
 				const uint32_t height = bx::clamp<uint32_t>(
-					  recoverSurfaceExtent ? surfaceCapabilities.currentExtent.height : m_desc.height
+					  concreteSurfaceExtent ? surfaceCapabilities.currentExtent.height : m_desc.height
 					, surfaceCapabilities.minImageExtent.height
 					, surfaceCapabilities.maxImageExtent.height
 					);
@@ -8761,18 +8772,18 @@ VK_DESTROY
 		}
 		BX_TRACE("Swapchain color format: requested %s, actual %s (VkFormat %d, color space %d, srgb: %d).", getName(m_desc.formatColor), getName(m_colorFormat), surfaceFormat, surfaceColorSpace, srgb);
 
-		// A surface-driven recovery must use the new concrete surface extent,
-		// rather than the old request that preceded the resize notification.
-		const bool recoverSurfaceExtent = m_extentRecovery
+		// Keep the recovered concrete surface extent across another recreation
+		// before the frontend reports the resized dimensions.
+		const bool concreteSurfaceExtent = (m_extentRecovery || m_reconcileExtent)
 			&& UINT32_MAX != surfaceCapabilities.currentExtent.width
 			&& UINT32_MAX != surfaceCapabilities.currentExtent.height;
 		const uint32_t width = bx::clamp<uint32_t>(
-			  recoverSurfaceExtent ? surfaceCapabilities.currentExtent.width : m_desc.width
+			  concreteSurfaceExtent ? surfaceCapabilities.currentExtent.width : m_desc.width
 			, surfaceCapabilities.minImageExtent.width
 			, surfaceCapabilities.maxImageExtent.width
 			);
 		const uint32_t height = bx::clamp<uint32_t>(
-			  recoverSurfaceExtent ? surfaceCapabilities.currentExtent.height : m_desc.height
+			  concreteSurfaceExtent ? surfaceCapabilities.currentExtent.height : m_desc.height
 			, surfaceCapabilities.minImageExtent.height
 			, surfaceCapabilities.maxImageExtent.height
 			);
@@ -9498,7 +9509,7 @@ VK_DESTROY
 					// Defer before update() releases any existing framebuffer resources.
 					const bool extentChanged = caps.currentExtent.width  != m_surfaceExtent.width
 						|| caps.currentExtent.height != m_surfaceExtent.height;
-					const bool concreteExtent = extentChanged
+					const bool concreteExtent = (extentChanged || m_reconcileExtent)
 						&& UINT32_MAX != caps.currentExtent.width
 						&& UINT32_MAX != caps.currentExtent.height;
 					const uint32_t width = bx::clamp<uint32_t>(
