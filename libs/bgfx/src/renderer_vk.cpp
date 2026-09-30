@@ -3305,6 +3305,8 @@ VK_IMPORT_DEVICE
 			||  m_mainSwapChain.formatColor        !=  _swapChain.formatColor
 			||  m_mainSwapChain.formatDepthStencil !=  _swapChain.formatDepthStencil
 			||  m_mainSwapChain.depth.idx          !=  _swapChain.depth.idx
+			||  m_mainSwapChain.numBackBuffers     !=  _swapChain.numBackBuffers
+			||  m_mainSwapChain.maxFrameLatency    !=  _swapChain.maxFrameLatency
 			||  m_mainSwapChain.nwh                !=  _swapChain.nwh
 			||  m_mainSwapChain.ndt                !=  _swapChain.ndt
 			||  m_mainSwapChain.flags              !=  _swapChain.flags
@@ -8305,6 +8307,7 @@ VK_DESTROY
 			|| m_needToRecreateSwapchain
 			|| m_desc.formatColor      != _desc.formatColor
 			|| m_desc.formatDepthStencil != _desc.formatDepthStencil
+			|| m_desc.numBackBuffers    != _desc.numBackBuffers
 			|| (sizeChanged && !reconcileExtent)
 			|| (m_desc.flags & recreateSwapchainMask) != (_desc.flags & recreateSwapchainMask)
 			|| vsyncChanged
