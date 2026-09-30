@@ -3296,18 +3296,32 @@ VK_IMPORT_DEVICE
 				maskFlags &= ~BGFX_RESET_VSYNC;
 			}
 
-			if (false
+			// Compare frontend sizes to the last request, not the driver-recovered
+			// dimensions used for rendering while a resize notification is pending.
+			const SwapChain& requested = m_backBuffer.m_swapChain.m_desc;
+			const bool sizeChanged = requested.width  != _swapChain.width
+				|| requested.height != _swapChain.height;
+			const bool parametersChanged = false
 			||  m_mainSwapChain.formatColor        !=  _swapChain.formatColor
 			||  m_mainSwapChain.formatDepthStencil !=  _swapChain.formatDepthStencil
-			||  m_mainSwapChain.width              !=  _swapChain.width
-			||  m_mainSwapChain.height             !=  _swapChain.height
+			||  m_mainSwapChain.depth.idx          !=  _swapChain.depth.idx
 			||  m_mainSwapChain.nwh                !=  _swapChain.nwh
 			||  m_mainSwapChain.ndt                !=  _swapChain.ndt
 			||  m_mainSwapChain.flags              !=  _swapChain.flags
 			|| (m_reset&maskFlags)   != (_reset&maskFlags)
-			||  m_backBuffer.m_swapChain.m_needToRecreateSurface
-			||  m_backBuffer.m_swapChain.m_needToRecreateSwapchain
-			   )
+			;
+			const bool recoveryPending = m_backBuffer.m_swapChain.m_needToRecreateSurface
+				|| m_backBuffer.m_swapChain.m_needToRecreateSwapchain;
+			if (sizeChanged && !parametersChanged && !recoveryPending
+			&& m_backBuffer.m_swapChain.m_reconcileExtent
+			&& _swapChain.width  == m_backBuffer.m_width
+			&& _swapChain.height == m_backBuffer.m_height)
+			{
+				// Consume a matching late notification without resetting framebuffer
+				// and capture resources that already use the recovered dimensions.
+				m_backBuffer.update(m_commandBuffer, _swapChain);
+			}
+			else if (sizeChanged || parametersChanged || recoveryPending)
 			{
 				uint32_t flags = _reset & (~BGFX_RESET_INTERNAL_FORCE);
 
@@ -9476,8 +9490,28 @@ VK_DESTROY
 					 ||  caps.currentExtent.height != m_surfaceExtent.height
 					 ||  caps.currentTransform != m_surfaceTransform)
 				{
-					m_extentRecovery = caps.currentExtent.width  != m_surfaceExtent.width
+					// A successful SUBOPTIMAL chain may keep rendering until the
+					// caller supplies a depth attachment covering the recovered size.
+					// Defer before update() releases any existing framebuffer resources.
+					const bool extentChanged = caps.currentExtent.width  != m_surfaceExtent.width
 						|| caps.currentExtent.height != m_surfaceExtent.height;
+					const bool concreteExtent = extentChanged
+						&& UINT32_MAX != caps.currentExtent.width
+						&& UINT32_MAX != caps.currentExtent.height;
+					const uint32_t width = bx::clamp<uint32_t>(
+						  concreteExtent ? caps.currentExtent.width : m_desc.width
+						, caps.minImageExtent.width, caps.maxImageExtent.width);
+					const uint32_t height = bx::clamp<uint32_t>(
+						  concreteExtent ? caps.currentExtent.height : m_desc.height
+						, caps.minImageExtent.height, caps.maxImageExtent.height);
+					if (isValid(m_desc.depth)
+					&& (s_renderVK->m_textures[m_desc.depth.idx].m_width < width
+					 || s_renderVK->m_textures[m_desc.depth.idx].m_height < height))
+					{
+						m_suboptimal = false;
+						return;
+					}
+					m_extentRecovery = extentChanged;
 					m_needToRecreateSwapchain = true;
 					BX_TRACE("SUBOPTIMAL recovery: surface extent %ux%u -> %ux%u, transform 0x%x -> 0x%x."
 						, m_surfaceExtent.width, m_surfaceExtent.height
