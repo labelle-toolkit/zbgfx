@@ -3195,6 +3195,7 @@ VK_IMPORT_DEVICE
 
 				release(m_captureBuffer);
 				recycleMemory(m_captureMemory);
+				m_captureMemory = DeviceMemoryAllocationVK();
 				m_captureSize = 0;
 			}
 		}
