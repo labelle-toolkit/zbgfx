@@ -2363,7 +2363,11 @@ VK_IMPORT_DEVICE
 					// Initialization accepted this format preference, possibly via
 					// a surface-format fallback. Neutral resets reuse that preference;
 					// retain its backbuffer support without claiming texture support.
-					g_caps.formats[m_mainSwapChain.formatColor] |= BGFX_CAPS_FORMAT_TEXTURE_BACKBUFFER;
+					if (TextureFormat::Unknown < m_mainSwapChain.formatColor
+					&&  m_mainSwapChain.formatColor < TextureFormat::UnknownDepth)
+					{
+						g_caps.formats[m_mainSwapChain.formatColor] |= BGFX_CAPS_FORMAT_TEXTURE_BACKBUFFER;
+					}
 				}
 				else
 				{
