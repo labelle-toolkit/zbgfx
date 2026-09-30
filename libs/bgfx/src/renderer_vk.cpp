@@ -9460,9 +9460,8 @@ VK_DESTROY
 			if (m_suboptimal && !m_needToRecreateSwapchain)
 			{
 				// SUBOPTIMAL alone is not evidence that rebuilding will help.
-				// Keep compositor rotation: rebuilding with the same preTransform
-				// cannot resolve a transform-only mismatch. Recover only an extent
-				// change relative to the successful creation's surface snapshot,
+				// Keep compositor rotation while the surface snapshot is stable.
+				// Recover an extent or transform change relative to successful creation,
 				// not imageExtent (which may intentionally differ from the surface).
 				VkSurfaceCapabilitiesKHR caps;
 				const VkResult capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_renderVK->m_physicalDevice, m_surface, &caps);
@@ -9474,9 +9473,11 @@ VK_DESTROY
 					BX_TRACE("SUBOPTIMAL recovery: surface capabilities query failed: %s.", getName(capsResult) );
 				}
 				else if (caps.currentExtent.width  != m_surfaceExtent.width
-					 ||  caps.currentExtent.height != m_surfaceExtent.height)
+					 ||  caps.currentExtent.height != m_surfaceExtent.height
+					 ||  caps.currentTransform != m_surfaceTransform)
 				{
-					m_extentRecovery = true;
+					m_extentRecovery = caps.currentExtent.width  != m_surfaceExtent.width
+						|| caps.currentExtent.height != m_surfaceExtent.height;
 					m_needToRecreateSwapchain = true;
 					BX_TRACE("SUBOPTIMAL recovery: surface extent %ux%u -> %ux%u, transform 0x%x -> 0x%x."
 						, m_surfaceExtent.width, m_surfaceExtent.height
