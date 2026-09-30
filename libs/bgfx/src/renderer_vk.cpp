@@ -10476,6 +10476,9 @@ VK_DESTROY
 
 		ChunkedScratchBufferVK& uniformScratchBuffer = m_uniformScratchBuffer;
 		uniformScratchBuffer.begin();
+		// Reuse only within this submit, while the program and its constants remain unchanged.
+		ChunkedScratchBufferOffset uniformSbo = {};
+		bool uniformSboValid = false;
 
 		StagingScratchBufferVK& stagingScratchBuffer = m_scratchStagingBuffer[m_cmd.m_currentFrameInFlight];
 
@@ -10526,6 +10529,7 @@ VK_DESTROY
 
 				if (viewChanged)
 				{
+					uniformSboValid = false;
 					view = key.m_view;
 					currentProgram = BGFX_INVALID_HANDLE;
 					hasPredefined = false;
@@ -10558,6 +10562,7 @@ VK_DESTROY
 				{
 					if (wasCompute)
 					{
+						uniformSboValid = false;
 						wasCompute = false;
 						currentBindHash = 0;
 					}
@@ -10768,6 +10773,7 @@ VK_DESTROY
 				{
 					if (!wasCompute)
 					{
+						uniformSboValid = false;
 						wasCompute = true;
 						currentBindHash = 0;
 
@@ -10837,19 +10843,23 @@ VK_DESTROY
 
 					if (VK_NULL_HANDLE != program.m_descriptorSetLayout)
 					{
-						ChunkedScratchBufferOffset sbo;
+						ChunkedScratchBufferOffset sbo = {};
 
 						const uint32_t vsSize = program.m_vsh->m_size;
-						uint32_t numOffsets = 0;
+						const uint32_t numOffsets = 0 < vsSize ? 1 : 0;
 
-						if (constantsChanged
-						||  hasPredefined)
+						if (vsSize > 0)
 						{
-							if (vsSize > 0)
+							if (!uniformSboValid || constantsChanged || hasPredefined)
 							{
-								uniformScratchBuffer.write(sbo, m_vsScratch, vsSize);
-								numOffsets = 1;
+								uniformScratchBuffer.write(uniformSbo, m_vsScratch, vsSize);
+								uniformSboValid = true;
 							}
+							sbo = uniformSbo;
+						}
+						else
+						{
+							uniformSboValid = false;
 						}
 
 						bx::HashMurmur2A hash;
@@ -11197,19 +11207,24 @@ VK_DESTROY
 
 					if (VK_NULL_HANDLE != program.m_descriptorSetLayout)
 					{
-						ChunkedScratchBufferOffset sbo;
+						ChunkedScratchBufferOffset sbo = {};
 
 						const uint32_t vsSize = program.m_vsh->m_size;
 						const uint32_t fsSize = NULL != program.m_fsh ? program.m_fsh->m_size : 0;
-						uint32_t numOffsets = 0;
+						const uint32_t numOffsets = (0 < vsSize) + (0 < fsSize);
 
-						if (true
-						&& (constantsChanged || hasPredefined)
-						&& (0 < vsSize || 0 < fsSize)
-						   )
+						if (0 < vsSize || 0 < fsSize)
 						{
-							uniformScratchBuffer.write(sbo, m_vsScratch, vsSize, m_fsScratch, fsSize);
-							numOffsets = (0 < vsSize) + (0 < fsSize);
+							if (!uniformSboValid || constantsChanged || hasPredefined)
+							{
+								uniformScratchBuffer.write(uniformSbo, m_vsScratch, vsSize, m_fsScratch, fsSize);
+								uniformSboValid = true;
+							}
+							sbo = uniformSbo;
+						}
+						else
+						{
+							uniformSboValid = false;
 						}
 
 						bx::HashMurmur2A hash;
