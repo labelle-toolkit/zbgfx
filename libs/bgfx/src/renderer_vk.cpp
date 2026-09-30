@@ -6225,6 +6225,7 @@ VK_DESTROY
 
 		for (uint8_t stage = 0; stage < BX_COUNTOF(m_bindInfo); ++stage)
 		{
+			m_bindInfo[stage].uniformHandle = BGFX_INVALID_HANDLE;
 			const ShaderVK* shader = NULL;
 			if (isValid(m_vsh->m_bindInfo[stage].uniformHandle) )
 			{
