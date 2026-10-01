@@ -2305,7 +2305,7 @@ VK_IMPORT_DEVICE
 
 			{
 				m_mainSwapChain = _init.swapChain;
-				m_reset &= ~BGFX_RESET_INTERNAL_FORCE;
+				m_reset = _init.reset & ~BGFX_RESET_INTERNAL_FORCE;
 
 				m_numWindows = 0;
 
