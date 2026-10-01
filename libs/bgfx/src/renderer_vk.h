@@ -33,6 +33,7 @@
 //#define VK_USE_64_BIT_PTR_DEFINES 0
 #include <vulkan-local/vulkan.h>
 #include <vulkan-local/vulkan_beta.h>
+#include "surface_rotation_vk.h"
 
 // vulkan.h pulls X11 crap...
 #if defined(None)
@@ -780,6 +781,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 			, m_extentRecovery(false)
 			, m_reconcileExtent(false)
 			, m_swapChainCreateCount(0)
+			, m_rotation(0, 0, SurfaceRotationVK::Identity)
 			, m_backBufferDepthStencilImageView(VK_NULL_HANDLE)
 			, m_depthStencilFormat(VK_FORMAT_UNDEFINED)
 			, m_depthStencilAspect(0)
@@ -795,6 +797,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 
 		VkResult createSurface();
 		VkResult createSwapChain();
+		bool getSurfaceLayout(const VkSurfaceCapabilitiesKHR& _caps, bool _recoverExtent, SurfaceRotationVK& _layout, VkSurfaceTransformFlagBitsKHR& _selected) const;
 		VkResult createAttachments(VkCommandBuffer _commandBuffer);
 		VkResult createFrameBuffer();
 
@@ -851,6 +854,7 @@ VK_DESTROY_FUNC(DescriptorSet);
 		uint32_t m_swapChainCreateCount;
 		VkExtent2D m_surfaceExtent;
 		VkSurfaceTransformFlagBitsKHR m_surfaceTransform;
+		SurfaceRotationVK m_rotation;
 		bool m_needToRecreateSwapchain;
 		bool m_needToRecreateSurface;
 
@@ -902,6 +906,18 @@ VK_DESTROY_FUNC(DescriptorSet);
 		void markDirty() { m_needResolve = true; }
 
 		bool isRenderable() const;
+
+		SurfaceRotationVK surfaceRotation() const
+		{
+			return NULL != m_nwh ? m_swapChain.m_rotation : SurfaceRotationVK(m_width, m_height, SurfaceRotationVK::Identity);
+		}
+
+		VkRect2D physicalRect(const Rect& _rect) const
+		{
+			const SurfaceRotationVK rotation = surfaceRotation();
+			const auto rect = rotation.mapRect(rotation.clipRect({ _rect.m_x, _rect.m_y, _rect.m_width, _rect.m_height }));
+			return { { rect.x, rect.y }, { rect.width, rect.height } };
+		}
 
 		bool isSwapChain() const
 		{

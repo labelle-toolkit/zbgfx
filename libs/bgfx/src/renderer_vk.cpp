@@ -3070,14 +3070,15 @@ VK_IMPORT_DEVICE
 			const FrameBufferVK& frameBuffer = getFrameBuffer(_handle);
 			const uint32_t width  = frameBuffer.m_width;
 			const uint32_t height = frameBuffer.m_height;
+			const SurfaceRotationVK rotation = frameBuffer.surfaceRotation();
 
 			setFrameBuffer(_handle);
 
 			VkViewport vp;
 			vp.x        = 0.0f;
-			vp.y        =  float(height);
-			vp.width    =  float(width);
-			vp.height   = -float(height);
+			vp.y        =  float(rotation.physicalHeight());
+			vp.width    =  float(rotation.physicalWidth());
+			vp.height   = -float(rotation.physicalHeight());
 			vp.minDepth = 0.0f;
 			vp.maxDepth = 1.0f;
 			vkCmdSetViewport(m_commandBuffer, 0, 1, &vp);
@@ -3085,8 +3086,8 @@ VK_IMPORT_DEVICE
 			VkRect2D rc;
 			rc.offset.x      = 0;
 			rc.offset.y      = 0;
-			rc.extent.width  = width;
-			rc.extent.height = height;
+			rc.extent.width  = rotation.physicalWidth();
+			rc.extent.height = rotation.physicalHeight();
 			vkCmdSetScissor(m_commandBuffer, 0, 1, &rc);
 
 			const uint64_t state = 0
@@ -3110,6 +3111,7 @@ VK_IMPORT_DEVICE
 			ProgramVK& program = m_program[_blitter.m_program.idx];
 			float proj[16];
 			bx::mtxOrtho(proj, 0.0f, (float)width, (float)height, 0.0f, 0.0f, 1000.0f, 0.0f, false);
+			rotation.rotateProjection(proj, proj);
 
 			PredefinedUniform& predefined = m_program[_blitter.m_program.idx].m_predefined[0];
 			uint8_t flags = predefined.m_type;
@@ -3180,8 +3182,8 @@ VK_IMPORT_DEVICE
 				rpbi.framebuffer = frameBuffer.m_currentFramebuffer;
 				rpbi.renderArea.offset.x = 0;
 				rpbi.renderArea.offset.y = 0;
-				rpbi.renderArea.extent.width  = frameBuffer.m_width;
-				rpbi.renderArea.extent.height = frameBuffer.m_height;
+				rpbi.renderArea.extent.width  = frameBuffer.surfaceRotation().physicalWidth();
+				rpbi.renderArea.extent.height = frameBuffer.surfaceRotation().physicalHeight();
 				rpbi.clearValueCount = 0;
 				rpbi.pClearValues    = NULL;
 
@@ -4804,7 +4806,28 @@ VK_IMPORT_DEVICE
 				uint8_t* src;
 				VK_CHECK(vkMapMemory(m_device, _memory.mem, _memory.offset, _memory.size, 0, (void**)&src) );
 
-				_func(src, width, height, _swapChain.m_colorFormat, pitch, _userData);
+				const SurfaceRotationVK& rotation = _swapChain.m_rotation;
+				if (SurfaceRotationVK::Identity == rotation.rotation)
+				{
+					_func(src, width, height, _swapChain.m_colorFormat, pitch, _userData);
+				}
+				else
+				{
+					const uint32_t bytesPerPixel = bimg::getBitsPerPixel(bimg::TextureFormat::Enum(_swapChain.m_colorFormat)) / 8;
+					const uint64_t logicalPitch = uint64_t(rotation.width)*bytesPerPixel;
+					const uint64_t logicalSize = logicalPitch*rotation.height;
+					uint8_t* upright = logicalSize <= UINT32_MAX && 0 != bytesPerPixel
+						? static_cast<uint8_t*>(bx::alloc(g_allocator, logicalSize)) : NULL;
+					if (NULL == upright || !rotation.readLogicalPixels(upright, uint32_t(logicalPitch), logicalSize, src, pitch, _memory.size, bytesPerPixel))
+					{
+						bx::free(g_allocator, upright);
+						vkUnmapMemory(m_device, _memory.mem);
+						readback.destroy();
+						return false;
+					}
+					_func(upright, rotation.width, rotation.height, _swapChain.m_colorFormat, uint32_t(logicalPitch), _userData);
+					bx::free(g_allocator, upright);
+				}
 
 				vkUnmapMemory(m_device, _memory.mem);
 
@@ -4920,13 +4943,8 @@ VK_IMPORT_DEVICE
 
 		void clearQuad(const Rect& _rect, const Clear& _clear, const float _palette[][4])
 		{
-			const Rect clearRect = _rect;
-
 			VkClearRect rect[1];
-			rect[0].rect.offset.x      = clearRect.m_x;
-			rect[0].rect.offset.y      = clearRect.m_y;
-			rect[0].rect.extent.width  = clearRect.m_width;
-			rect[0].rect.extent.height = clearRect.m_height;
+			rect[0].rect = getFrameBuffer(m_fbh).physicalRect(_rect);
 			rect[0].baseArrayLayer = 0;
 			rect[0].layerCount     = 1;
 
@@ -8306,8 +8324,8 @@ VK_DESTROY
 		// Reconcile that notification with the already-created actual extent,
 		// while retaining the application's requested dimensions in m_desc.
 		const bool reconcileExtent = m_reconcileExtent
-			&& _desc.width == m_sci.imageExtent.width
-			&& _desc.height == m_sci.imageExtent.height;
+			&& _desc.width == m_rotation.width
+			&& _desc.height == m_rotation.height;
 
 		const bool recreateSwapchain = false
 			|| m_needToRecreateSwapchain
@@ -8382,24 +8400,17 @@ VK_DESTROY
 					&& surfaceCapabilities.maxImageExtent.height <= surfaceExtentSanityMax
 					;
 
-				const bool concreteSurfaceExtent = (m_extentRecovery || m_reconcileExtent)
-					&& UINT32_MAX != surfaceCapabilities.currentExtent.width
-					&& UINT32_MAX != surfaceCapabilities.currentExtent.height;
-				const uint32_t width = bx::clamp<uint32_t>(
-					  concreteSurfaceExtent ? surfaceCapabilities.currentExtent.width : m_desc.width
-					, surfaceCapabilities.minImageExtent.width
-					, surfaceCapabilities.maxImageExtent.width
-					);
-				const uint32_t height = bx::clamp<uint32_t>(
-					  concreteSurfaceExtent ? surfaceCapabilities.currentExtent.height : m_desc.height
-					, surfaceCapabilities.minImageExtent.height
-					, surfaceCapabilities.maxImageExtent.height
-					);
+				SurfaceRotationVK surfaceLayout(0, 0, SurfaceRotationVK::Identity);
+				VkSurfaceTransformFlagBitsKHR preTransform;
+				const bool layoutValid = getSurfaceLayout(surfaceCapabilities, m_extentRecovery || m_reconcileExtent, surfaceLayout, preTransform);
+				const uint32_t width = surfaceLayout.physicalWidth();
+				const uint32_t height = surfaceLayout.physicalHeight();
 
 				if (0 == width
 				||  0 == height
 				||  VK_SUCCESS != result
-				||  !surfaceCapsSane)
+				||  !surfaceCapsSane
+				||  !layoutValid)
 				{
 					m_sci.oldSwapchain = VK_NULL_HANDLE;
 					s_renderVK->kick(true);
@@ -8605,6 +8616,16 @@ VK_DESTROY
 		release(m_surface);
 	}
 
+	bool SwapChainVK::getSurfaceLayout(const VkSurfaceCapabilitiesKHR& _caps, bool _recoverExtent, SurfaceRotationVK& _layout, VkSurfaceTransformFlagBitsKHR& _selected) const
+	{
+		const VkSurfaceTransformFlagBitsKHR preferred = BX_ENABLED(BX_PLATFORM_NX)
+			? VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR : VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+		const bool callerDepth = isValid(m_desc.depth);
+		const uint32_t depthWidth = callerDepth ? s_renderVK->m_textures[m_desc.depth.idx].m_width : UINT32_MAX;
+		const uint32_t depthHeight = callerDepth ? s_renderVK->m_textures[m_desc.depth.idx].m_height : UINT32_MAX;
+		return SurfaceRotationVK::layoutWithDepth(_caps, m_desc.width, m_desc.height, _recoverExtent, preferred, depthWidth, depthHeight, _layout, _selected);
+	}
+
 	VkResult SwapChainVK::createSwapChain()
 	{
 		BGFX_PROFILER_SCOPE("SwapChainVK::createSwapchain", kColorFrame);
@@ -8777,30 +8798,16 @@ VK_DESTROY
 		}
 		BX_TRACE("Swapchain color format: requested %s, actual %s (VkFormat %d, color space %d, srgb: %d).", getName(m_desc.formatColor), getName(m_colorFormat), surfaceFormat, surfaceColorSpace, srgb);
 
-		// Keep the recovered concrete surface extent across another recreation
-		// before the frontend reports the resized dimensions.
-		const bool concreteSurfaceExtent = (m_extentRecovery || m_reconcileExtent)
-			&& UINT32_MAX != surfaceCapabilities.currentExtent.width
-			&& UINT32_MAX != surfaceCapabilities.currentExtent.height;
-		const uint32_t width = bx::clamp<uint32_t>(
-			  concreteSurfaceExtent ? surfaceCapabilities.currentExtent.width : m_desc.width
-			, surfaceCapabilities.minImageExtent.width
-			, surfaceCapabilities.maxImageExtent.width
-			);
-		const uint32_t height = bx::clamp<uint32_t>(
-			  concreteSurfaceExtent ? surfaceCapabilities.currentExtent.height : m_desc.height
-			, surfaceCapabilities.minImageExtent.height
-			, surfaceCapabilities.maxImageExtent.height
-			);
-		if (width != m_desc.width || height != m_desc.height)
+		SurfaceRotationVK surfaceLayout(0, 0, SurfaceRotationVK::Identity);
+		VkSurfaceTransformFlagBitsKHR preTransform;
+		if (!getSurfaceLayout(surfaceCapabilities, m_extentRecovery || m_reconcileExtent, surfaceLayout, preTransform))
 		{
-			BX_TRACE("Clamped swapchain resolution from %dx%d to %dx%d"
-					, m_desc.width
-					, m_desc.height
-					, width
-					, height
-					);
+			BX_TRACE("Create swapchain error: Unsupported surface transform or image extent.");
+			return VK_ERROR_INITIALIZATION_FAILED;
 		}
+		const uint32_t width = surfaceLayout.physicalWidth();
+		const uint32_t height = surfaceLayout.physicalHeight();
+		m_sci.preTransform = preTransform;
 
 		VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 
@@ -9020,6 +9027,7 @@ VK_DESTROY
 		m_extentRecovery = false;
 		m_surfaceExtent = surfaceCapabilities.currentExtent;
 		m_surfaceTransform = surfaceCapabilities.currentTransform;
+		m_rotation = surfaceLayout;
 		++m_swapChainCreateCount;
 		BX_TRACE("Swapchain creation #%u: reason=%s, surface extent=%ux%u, currentTransform=0x%x, supportedTransforms=0x%x, preTransform=0x%x."
 			, m_swapChainCreateCount
@@ -9493,7 +9501,7 @@ VK_DESTROY
 			if (m_suboptimal && !m_needToRecreateSwapchain)
 			{
 				// SUBOPTIMAL alone is not evidence that rebuilding will help.
-				// Keep compositor rotation while the surface snapshot is stable.
+				// Keep the selected pre-rotation while the surface snapshot is stable.
 				// Recover an extent or transform change relative to successful creation,
 				// not imageExtent (which may intentionally differ from the surface).
 				VkSurfaceCapabilitiesKHR caps;
@@ -9514,15 +9522,15 @@ VK_DESTROY
 					// Defer before update() releases any existing framebuffer resources.
 					const bool extentChanged = caps.currentExtent.width  != m_surfaceExtent.width
 						|| caps.currentExtent.height != m_surfaceExtent.height;
-					const bool concreteExtent = (extentChanged || m_reconcileExtent)
-						&& UINT32_MAX != caps.currentExtent.width
-						&& UINT32_MAX != caps.currentExtent.height;
-					const uint32_t width = bx::clamp<uint32_t>(
-						  concreteExtent ? caps.currentExtent.width : m_desc.width
-						, caps.minImageExtent.width, caps.maxImageExtent.width);
-					const uint32_t height = bx::clamp<uint32_t>(
-						  concreteExtent ? caps.currentExtent.height : m_desc.height
-						, caps.minImageExtent.height, caps.maxImageExtent.height);
+					SurfaceRotationVK surfaceLayout(0, 0, SurfaceRotationVK::Identity);
+					VkSurfaceTransformFlagBitsKHR preTransform;
+					if (!getSurfaceLayout(caps, extentChanged || m_reconcileExtent, surfaceLayout, preTransform))
+					{
+						m_suboptimal = false;
+						return;
+					}
+					const uint32_t width = surfaceLayout.physicalWidth();
+					const uint32_t height = surfaceLayout.physicalHeight();
 					if (isValid(m_desc.depth)
 					&& (s_renderVK->m_textures[m_desc.depth.idx].m_width < width
 					 || s_renderVK->m_textures[m_desc.depth.idx].m_height < height))
@@ -9618,8 +9626,8 @@ VK_DESTROY
 
 		m_denseIdx = _denseIdx;
 		m_nwh      = _desc.nwh;
-		m_width    = m_swapChain.m_sci.imageExtent.width;
-		m_height   = m_swapChain.m_sci.imageExtent.height;
+		m_width    = m_swapChain.m_rotation.width;
+		m_height   = m_swapChain.m_rotation.height;
 		m_sampler  = m_swapChain.m_sampler;
 
 		return result;
@@ -9727,8 +9735,8 @@ VK_DESTROY
 		VK_CHECK(s_renderVK->getRenderPass(m_swapChain, 0, &m_renderPass, &m_renderPassHashKey) );
 		// Don't believe the passed size, as the Vulkan driver might have
 		// specified another resolution, which we had to obey.
-		m_width   = m_swapChain.m_sci.imageExtent.width;
-		m_height  = m_swapChain.m_sci.imageExtent.height;
+		m_width   = m_swapChain.m_rotation.width;
+		m_height  = m_swapChain.m_rotation.height;
 		m_sampler = m_swapChain.m_sampler;
 	}
 
@@ -10913,25 +10921,19 @@ VK_DESTROY
 
 						rpbi.framebuffer = fb.m_currentFramebuffer;
 						rpbi.renderPass  = renderPass;
-						rpbi.renderArea.offset.x = renderArea.m_x;
-						rpbi.renderArea.offset.y = renderArea.m_y;
-						rpbi.renderArea.extent.width  = renderArea.m_width;
-						rpbi.renderArea.extent.height = renderArea.m_height;
+						rpbi.renderArea = fb.physicalRect(renderArea);
 
+						const auto viewportRect = fb.surfaceRotation().mapRect({ rect.m_x, rect.m_y, rect.m_width, rect.m_height });
 						VkViewport vp;
-						vp.x        =  float(rect.m_x);
-						vp.y        =  float(rect.m_y + rect.m_height);
-						vp.width    =  float(rect.m_width);
-						vp.height   = -float(rect.m_height);
+						vp.x        = float(viewportRect.x);
+						vp.y        = float(viewportRect.y) + float(viewportRect.height);
+						vp.width    = float(viewportRect.width);
+						vp.height   = -float(viewportRect.height);
 						vp.minDepth = _render->m_view[view].m_minDepth;
 						vp.maxDepth = _render->m_view[view].m_maxDepth;
 						vkCmdSetViewport(m_commandBuffer, 0, 1, &vp);
 
-						VkRect2D rc;
-						rc.offset.x      = viewScissorRect.m_x;
-						rc.offset.y      = viewScissorRect.m_y;
-						rc.extent.width  = viewScissorRect.m_width;
-						rc.extent.height = viewScissorRect.m_height;
+						const VkRect2D rc = getFrameBuffer(m_fbh).physicalRect(viewScissorRect);
 						vkCmdSetScissor(m_commandBuffer, 0, 1, &rc);
 
 						if (!beginRenderPass)
@@ -11126,6 +11128,7 @@ VK_DESTROY
 					if (constantsChanged
 					||  hasPredefined)
 					{
+						viewState.setProjection(_render, view, NULL);
 						viewState.setPredefined<4>(this, view, program, _render, compute);
 					}
 
@@ -11434,11 +11437,7 @@ VK_DESTROY
 							||  viewHasScissor)
 							{
 								restoreScissor = false;
-								VkRect2D rc;
-								rc.offset.x      = viewScissorRect.m_x;
-								rc.offset.y      = viewScissorRect.m_y;
-								rc.extent.width  = viewScissorRect.m_width;
-								rc.extent.height = viewScissorRect.m_height;
+								const VkRect2D rc = getFrameBuffer(m_fbh).physicalRect(viewScissorRect);
 								vkCmdSetScissor(m_commandBuffer, 0, 1, &rc);
 							}
 						}
@@ -11448,11 +11447,7 @@ VK_DESTROY
 							Rect scissorRect;
 							scissorRect.setIntersect(viewScissorRect, _render->m_frameCache.m_rectCache.m_cache[scissor]);
 
-							VkRect2D rc;
-							rc.offset.x      = scissorRect.m_x;
-							rc.offset.y      = scissorRect.m_y;
-							rc.extent.width  = scissorRect.m_width;
-							rc.extent.height = scissorRect.m_height;
+							const VkRect2D rc = getFrameBuffer(m_fbh).physicalRect(scissorRect);
 							vkCmdSetScissor(m_commandBuffer, 0, 1, &rc);
 						}
 					}
@@ -11490,6 +11485,13 @@ VK_DESTROY
 					{
 						uint32_t ref = (draw.m_stateFlags & BGFX_STATE_ALPHA_REF_MASK) >> BGFX_STATE_ALPHA_REF_SHIFT;
 						viewState.m_alphaRef = ref / 255.0f;
+						const SurfaceRotationVK rotation = getFrameBuffer(m_fbh).surfaceRotation();
+						Matrix4 projection;
+						if (SurfaceRotationVK::Identity != rotation.rotation)
+						{
+							rotation.rotateProjection(projection.un.val, _render->m_view[view].m_proj.un.val);
+						}
+						viewState.setProjection(_render, view, SurfaceRotationVK::Identity == rotation.rotation ? NULL : &projection);
 						viewState.setPredefined<4>(this, view, program, _render, draw);
 					}
 

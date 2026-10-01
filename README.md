@@ -25,6 +25,28 @@ When [zig](https://codeberg.org/ziglang/zig) meets [bgfx](https://github.com/bka
 >
 > - `shaderc` need some time to compile.
 
+## Vulkan surface pre-rotation
+
+Supported 90°, 180° and 270° surface transforms use pre-rotated swapchain
+images. Application coordinates remain logical: backbuffer projection
+uniforms, viewports, scissors and clears rotate during submission, and
+screenshots/video capture return upright logical pixels. Offscreen targets
+and compute projections keep application coordinates.
+
+Vertex shaders must use bgfx's predefined projection, view-projection or
+model-view-projection uniforms. Direct clip-space output and manually supplied
+projection uniforms bypass this transform. Fragment-coordinate-dependent
+effects also need to account for physical backbuffer coordinates.
+
+Caller-owned depth attachments must cover the physical swapchain dimensions.
+If a logical-sized attachment cannot cover a quarter-turn image, the renderer
+retains supported identity/compositor presentation. Mirror transforms likewise
+retain supported compositor presentation; unsupported layouts are rejected.
+
+Run the coordinate, projection, readback and depth-layout tests with
+`zig build test -j2 -Dwith_shaderc=false`. Actual rotated-surface rendering,
+composition and performance still require device validation.
+
 ## License
 
 Folders `libs`, `shaders` is copy&paste from [bgfx](https://github.com/bkaradzic/bgfx) for more sell-contained

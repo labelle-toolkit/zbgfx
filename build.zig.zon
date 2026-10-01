@@ -8,6 +8,7 @@
         "libs",
         "shaders",
         "src",
+        "tests",
         "build.zig",
         "build.zig.zon",
     },
