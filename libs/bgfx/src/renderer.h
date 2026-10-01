@@ -102,6 +102,7 @@ namespace bgfx
 			m_invViewCached = UINT16_MAX;
 			m_invProjCached = UINT16_MAX;
 			m_invViewProjCached = UINT16_MAX;
+			m_effectiveProjView = UINT16_MAX;
 
 			m_view = m_viewTmp;
 
@@ -114,6 +115,40 @@ namespace bgfx
 					, &_frame->m_view[view].m_proj.un.f4x4
 					);
 			}
+		}
+
+		const Matrix4& getProjection(const Frame* _frame, uint16_t _view) const
+		{
+			return _view == m_effectiveProjView ? m_effectiveProj : _frame->m_view[_view].m_proj;
+		}
+
+		// Renderer-local projection override. Shared Frame data, offscreen views
+		// and compute dispatches retain the application's projection. Restore the
+		// previous view before selecting another, and invalidate derived inverses.
+		void setProjection(const Frame* _frame, uint16_t _view, const Matrix4* _projection)
+		{
+			if (NULL == _projection && UINT16_MAX == m_effectiveProjView)
+			{
+				return;
+			}
+			if (NULL != _projection && _view == m_effectiveProjView
+			&& 0 == bx::memCmp(&_projection->un.f4x4, &m_effectiveProj.un.f4x4, sizeof(Matrix4)))
+			{
+				return;
+			}
+			if (UINT16_MAX != m_effectiveProjView)
+			{
+				const uint16_t previous = m_effectiveProjView;
+				bx::float4x4_mul(&m_viewProj[previous].un.f4x4, &m_view[previous].un.f4x4, &_frame->m_view[previous].m_proj.un.f4x4);
+			}
+			m_effectiveProjView = UINT16_MAX;
+			if (NULL != _projection)
+			{
+				m_effectiveProj = *_projection;
+				m_effectiveProjView = _view;
+				bx::float4x4_mul(&m_viewProj[_view].un.f4x4, &m_view[_view].un.f4x4, &m_effectiveProj.un.f4x4);
+			}
+			m_invProjCached = m_invViewProjCached = UINT16_MAX;
 		}
 
 		template<uint16_t mtxRegs, typename RendererContext, typename Program, typename Draw>
@@ -193,7 +228,7 @@ namespace bgfx
 					{
 						_renderer->setShaderUniform4x4f(flags
 							, predefined.m_loc
-							, _frame->m_view[_view].m_proj.un.val
+							, getProjection(_frame, _view).un.val
 							, bx::min(mtxRegs, predefined.m_count)
 							);
 					}
@@ -205,7 +240,7 @@ namespace bgfx
 						{
 							m_invProjCached = _view;
 							bx::float4x4_inverse(&m_invProj.un.f4x4
-								, &_frame->m_view[_view].m_proj.un.f4x4
+								, &getProjection(_frame, _view).un.f4x4
 								);
 						}
 
@@ -355,6 +390,8 @@ namespace bgfx
 		uint16_t m_invViewCached;
 		uint16_t m_invProjCached;
 		uint16_t m_invViewProjCached;
+		Matrix4 m_effectiveProj;
+		uint16_t m_effectiveProjView;
 	};
 
 	template <typename Ty, uint16_t MaxHandleT>

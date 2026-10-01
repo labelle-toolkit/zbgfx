@@ -6,6 +6,17 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const rotation_tests = b.addExecutable(.{
+        .name = "vulkan-surface-rotation-tests",
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    rotation_tests.root_module.addCSourceFile(.{
+        .file = b.path("tests/vulkan_surface_rotation.cpp"),
+        .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti" },
+    });
+    const test_step = b.step("test", "Run generic Vulkan surface-coordinate tests");
+    test_step.dependOn(&b.addRunArtifact(rotation_tests).step);
+
     //
     // OPTIONS
     //
