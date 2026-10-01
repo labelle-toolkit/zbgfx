@@ -2325,8 +2325,6 @@ VK_IMPORT_DEVICE
 					m_windows[0] = BGFX_INVALID_HANDLE;
 					m_numWindows++;
 
-					postReset();
-
 					{
 						VkSurfaceKHR surface = m_backBuffer.m_swapChain.m_surface;
 
@@ -2465,6 +2463,12 @@ VK_IMPORT_DEVICE
 				goto error;
 			}
 
+			// Start capture only after every fallible initialization step succeeded.
+			// Failed initialization must not leave an unmatched captureBegin.
+			if (!headless)
+			{
+				postReset();
+			}
 			g_internalData.context = m_device;
 			return true;
 
@@ -3234,7 +3238,8 @@ VK_IMPORT_DEVICE
 					VK_CHECK(createReadbackBuffer(m_captureSize, &m_captureBuffer, &m_captureMemory) );
 				}
 
-				g_callback->captureBegin(m_mainSwapChain.width, m_mainSwapChain.height, pitch, m_backBuffer.m_swapChain.m_colorFormat, false);
+				// Match the allocation and frame payload when the surface clamps size.
+				g_callback->captureBegin(m_backBuffer.m_width, m_backBuffer.m_height, pitch, m_backBuffer.m_swapChain.m_colorFormat, false);
 			}
 		}
 
